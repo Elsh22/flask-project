@@ -1,0 +1,341 @@
+<!-- templates/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Microscope Scanner</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .controls {
+            text-align: center;
+            margin: 20px 0;
+        }
+        .status {
+            margin: 20px 0;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            min-height: 20px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .plots {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 20px;
+        }
+        .plot-container {
+            border: 1px solid #ddd;
+            padding: 10px;
+            border-radius: 5px;
+            text-align: center;
+            flex: 1;
+            min-width: 300px;
+            background-color: #fff;
+        }
+        .plot-img {
+            max-width: 100%;
+            height: auto;
+        }
+        .progress-container {
+            margin: 20px 0;
+            text-align: center;
+        }
+        .progress-bar {
+            width: 100%;
+            background-color: #e0e0e0;
+            padding: 3px;
+            border-radius: 3px;
+            box-shadow: inset 0 1px 3px rgba(0,0,0,.2);
+        }
+        .progress-bar-fill {
+            display: block;
+            height: 22px;
+            background-color: #4CAF50;
+            border-radius: 3px;
+            transition: width 0.5s ease-in-out;
+            text-align: center;
+            line-height: 22px;
+            color: white;
+            font-size: 12px;
+        }
+        button {
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            padding: 10px 20px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 4px 2px;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        button.stop {
+            background-color: #f44336;
+        }
+        /* Image container styles to prevent flickering */
+        .image-container {
+            position: relative;
+            width: 100%;
+            min-height: 300px; /* Set minimum height to prevent layout shifts */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .image-container img {
+            max-width: 100%;
+            max-height: 400px;
+            transition: opacity 0.3s ease;
+        }
+        .preload-image {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            z-index: -1;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Microscope Scanner Control Panel</h1>
+        
+        <div class="controls">
+            <button id="startBtn">Start Scan</button>
+            <button id="stopBtn" class="stop" disabled>Stop Scan</button>
+        </div>
+        
+        <div class="progress-container">
+            <div class="progress-bar">
+                <span class="progress-bar-fill" style="width:0%">0%</span>
+            </div>
+            <div id="progressText">Ready to start scanning</div>
+        </div>
+        
+        <div class="status" id="statusBox">
+            Ready to start scanning...
+        </div>
+        
+        <div class="plots">
+            <div class="plot-container">
+                <h3>Spectrum</h3>
+                <div class="image-container" id="spectrumContainer">
+                    <img id="spectrumPlot" class="plot-img" src="/spectrum_image" alt="No data yet">
+                    <img id="spectrumPlotPreload" class="plot-img preload-image" src="" alt="">
+                </div>
+                <div id="positionInfo"></div>
+            </div>
+            <div class="plot-container">
+                <h3>Intensity Map</h3>
+                <div class="image-container" id="gridContainer">
+                    <img id="gridPlot" class="plot-img" src="/grid_image" alt="No data yet">
+                    <img id="gridPlotPreload" class="plot-img preload-image" src="" alt="">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const startBtn = document.getElementById('startBtn');
+            const stopBtn = document.getElementById('stopBtn');
+            const statusBox = document.getElementById('statusBox');
+            const spectrumPlot = document.getElementById('spectrumPlot');
+            const spectrumPlotPreload = document.getElementById('spectrumPlotPreload');
+            const gridPlot = document.getElementById('gridPlot');
+            const gridPlotPreload = document.getElementById('gridPlotPreload');
+            const positionInfo = document.getElementById('positionInfo');
+            const progressBar = document.querySelector('.progress-bar-fill');
+            const progressText = document.getElementById('progressText');
+            
+            let statusPollInterval;
+            let isRunning = false;
+            
+            // Variables to track last update timestamps
+            let lastSpectrumUpdate = 0;
+            let lastGridUpdate = 0;
+            
+            // Handle button clicks
+            startBtn.addEventListener('click', function() {
+                fetch('/start_scan', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        startBtn.disabled = true;
+                        stopBtn.disabled = false;
+                        isRunning = true;
+                        
+                        // Start polling for updates
+                        startPolling();
+                        
+                        updateStatus('Scan started. Initializing hardware...');
+                    } else {
+                        updateStatus('Error: ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    updateStatus('Error: ' + error);
+                });
+            });
+            
+            stopBtn.addEventListener('click', function() {
+                fetch('/stop_scan', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    updateStatus('Stopping scan, please wait...');
+                })
+                .catch(error => {
+                    updateStatus('Error: ' + error);
+                });
+            });
+            
+            function startPolling() {
+                // Clear any existing interval
+                if (statusPollInterval) {
+                    clearInterval(statusPollInterval);
+                }
+                
+                // Poll for status updates every 500ms
+                statusPollInterval = setInterval(fetchStatus, 500);
+            }
+            
+            function stopPolling() {
+                if (statusPollInterval) {
+                    clearInterval(statusPollInterval);
+                    statusPollInterval = null;
+                }
+            }
+            
+            function fetchStatus() {
+                fetch('/status')
+                .then(response => response.json())
+                .then(data => {
+                    // Update status based on server response
+                    updateStatusFromServer(data);
+                    
+                    // If scan is no longer running, stop polling
+                    if (isRunning && !data.running) {
+                        isRunning = false;
+                        resetButtons();
+                        stopPolling();
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching status:', error);
+                });
+            }
+            
+            function updateStatusFromServer(data) {
+                // Update status messages
+                if (data.messages && data.messages.length > 0) {
+                    statusBox.innerHTML = data.messages.join('<br>');
+                    statusBox.scrollTop = statusBox.scrollHeight;
+                }
+                
+                // Update progress bar
+                if (data.progress) {
+                    const percentage = data.progress.percentage || 0;
+                    progressBar.style.width = percentage + '%';
+                    progressBar.textContent = percentage + '%';
+                    
+                    if (data.progress.row && data.progress.col && data.progress.total) {
+                        const currentPosition = (data.progress.row - 1) * Math.sqrt(data.progress.total) + data.progress.col;
+                        progressText.textContent = `Scanning position ${currentPosition}/${data.progress.total}`;
+                    }
+                }
+                
+                // Update position info
+                if (data.position) {
+                    positionInfo.textContent = `Position: X=${data.position.x}, Y=${data.position.y}`;
+                }
+                
+                // Smooth update of images using preloading
+                updateImagesSmooth();
+            }
+            
+            function updateImagesSmooth() {
+                const timestamp = new Date().getTime();
+                
+                // Only update spectrum if it's been at least 1 second since last update
+                if (timestamp - lastSpectrumUpdate > 1000) {
+                    lastSpectrumUpdate = timestamp;
+                    
+                    // Preload the new image
+                    spectrumPlotPreload.onload = function() {
+                        // When preloaded image is ready, swap with the visible image
+                        spectrumPlot.src = spectrumPlotPreload.src;
+                    };
+                    
+                    // Set source for preload image
+                    spectrumPlotPreload.src = `/spectrum_image?t=${timestamp}`;
+                }
+                
+                // Only update grid if it's been at least 1 second since last update
+                if (timestamp - lastGridUpdate > 1000) {
+                    lastGridUpdate = timestamp;
+                    
+                    // Preload the new image
+                    gridPlotPreload.onload = function() {
+                        // When preloaded image is ready, swap with the visible image
+                        gridPlot.src = gridPlotPreload.src;
+                    };
+                    
+                    // Set source for preload image
+                    gridPlotPreload.src = `/grid_image?t=${timestamp}`;
+                }
+            }
+            
+            function updateStatus(message) {
+                const timestamp = new Date().toLocaleTimeString();
+                statusBox.innerHTML += `<div>[${timestamp}] ${message}</div>`;
+                statusBox.scrollTop = statusBox.scrollHeight;
+            }
+            
+            function resetButtons() {
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+            }
+            
+            // Initial status check
+            fetchStatus();
+        });
+    </script>
+</body>
+</html>
